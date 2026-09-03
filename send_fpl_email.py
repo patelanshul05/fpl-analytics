@@ -1,110 +1,68 @@
 import os
 import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 import requests
 import pandas as pd
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
 
 TEAM_ID = 152146
-BOOTSTRAP_URL = "https://fantasy.premierleague.com/api/bootstrap-static/"
-FIXTURES_URL = "https://fantasy.premierleague.com/api/fixtures/"
 
 def get_fpl_data():
-    bootstrap = requests.get(BOOTSTRAP_URL).json()
-    fixtures = requests.get(FIXTURES_URL).json()
-    return bootstrap, fixtures
-
-def get_user_squad(current_gw):
-    for gw in range(current_gw, 0, -1):
-        res = requests.get(f"https://fantasy.premierleague.com/api/entry/{TEAM_ID}/event/{gw}/picks/")
-        if res.status_code == 200:
-            return res.json().get("picks", [])
-    return []
-
-def generate_report():
-    bootstrap, fixtures = get_fpl_data()
-    teams = {t["id"]: t["name"] for t in bootstrap["teams"]}
-    pos_map = {1: "GKP", 2: "DEF", 3: "MID", 4: "FWD"}
+    base_url = "https://fantasy.premierleague.com/api/"
+    bootstrap = requests.get(f"{base_url}bootstrap-static/").json()
+    my_team = requests.get(f"{base_url}my-team/{TEAM_ID}/").json() if TEAM_ID else None
     
-    current_gw = next((e["id"] for e in bootstrap["events"] if e.get("is_next")), 1)
-    squad_picks = get_user_squad(current_gw)
-    squad_ids = {p["element"] for p in squad_picks}
+    # Process market targets (Top 5 Transferred In)
+    elements_df = pd.DataFrame(bootstrap['elements'])
+    elements_df['now_cost'] = elements_df['now_cost'] / 10.0
+    elements_df['form'] = pd.to_numeric(elements_df['form'])
     
-    elements = pd.DataFrame(bootstrap["elements"])
-    elements["position"] = elements["element_type"].map(pos_map)
-    elements["price"] = elements["now_cost"] / 10.0
-    elements["team_name"] = elements["team"].map(teams)
-    elements["form_float"] = pd.to_numeric(elements["form"])
-
-    # Analyze Active Squad
-    squad_df = elements[elements["id"].isin(squad_ids)].copy()
+    top_targets = elements_df.sort_values(by='transfers_in_event', ascending=False).head(5)
     
-    # Captaincy Recommendations (Highest form in squad)
-    capt_candidates = squad_df.sort_values(by="form_float", ascending=False).head(2)
-    c_name = capt_candidates.iloc[0]["web_name"]
-    vc_name = capt_candidates.iloc[1]["web_name"]
-
-    # Underperformers in Squad
-    underperformers = squad_df.sort_values(by="form_float", ascending=True).head(3)
-    
-    # Blank / Double Gameweek & Fixture Check for Next GW
-    next_gw_fixtures = [f for f in fixtures if f.get("event") == current_gw]
-    team_fix_count = {t: 0 for t in teams.keys()}
-    for f in next_gw_fixtures:
-        team_fix_count[f["team_h"]] += 1
-        team_fix_count[f["team_a"]] += 1
+    target_rows = ""
+    for _, player in top_targets.iterrows():
+        target_rows += f"<tr><td><b>{player['web_name']}</b></td><td>£{player['now_cost']}m</td><td>{player['form']}</td><td>+{player['transfers_in_event']:,}</td></tr>"
         
-    squad_df["gw_fixtures"] = squad_df["team"].map(team_fix_count)
-    blanks = squad_df[squad_df["gw_fixtures"] == 0]["web_name"].tolist()
-    doubles = squad_df[squad_df["gw_fixtures"] > 1]["web_name"].tolist()
-
-    # Top Transfer Suggestions
-    targets = elements[~elements["id"].isin(squad_ids) & (elements["minutes"] > 200)]
-    top_targets = targets.sort_values(by="form_float", ascending=False).groupby("position").head(2)
-
-    # HTML Email Assembly
-    html = f"""
-    <h2>Gameweek {current_gw} Transfer & Squad Briefing</h2>
-    
-    <h3>👑 Captaincy Recommendations</h3>
-    <ul>
-        <li><b>Captain:</b> {c_name} (Form: {capt_candidates.iloc[0]['form']})</li>
-        <li><b>Vice-Captain:</b> {vc_name} (Form: {capt_candidates.iloc[1]['form']})</li>
-    </ul>
-
-    <h3>🚨 Fixture Alerts for GW{current_gw}</h3>
-    <p><b>Blank Gameweek Players:</b> {', '.join(blanks) if blanks else 'None'}</p>
-    <p><b>Double Gameweek Players:</b> {', '.join(doubles) if doubles else 'None'}</p>
-
-    <h3>⚠️ Squad Underperformers (Sell Candidates)</h3>
-    <ul>
-    """
-    for _, row in underperformers.iterrows():
-        html += f"<li><b>{row['web_name']}</b> ({row['position']}) - Form: {row['form']} | Price: £{row['price']}M</li>"
-    html += "</ul>"
-
-    html += "<h3>🔥 Top Market Targets (Buy Candidates)</h3><ul>"
-    for _, row in top_targets.iterrows():
-        html += f"<li><b>{row['web_name']}</b> ({row['team_name']} {row['position']}) - Form: {row['form']} | £{row['price']}M</li>"
-    html += "</ul>"
-
-    return html, current_gw
+    return target_rows
 
 def send_email():
-    html_content, gw = generate_report()
-    sender_email = os.environ["EMAIL_USER"]
-    sender_password = os.environ["EMAIL_PASS"]
-    recipient_email = os.environ["RECIPIENT_EMAIL"]
-
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = f"FPL GW{gw} Briefing - Team 152146"
-    msg["From"] = sender_email
-    msg["To"] = recipient_email
-    msg.attach(MIMEText(html_content, "html"))
-
-    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-        server.login(sender_email, sender_password)
-        server.sendmail(sender_email, recipient_email, msg.as_string())
+    email_user = os.getenv('EMAIL_USER')
+    email_pass = os.getenv('EMAIL_PASS')
+    recipient = os.getenv('RECIPIENT_EMAIL')
+    
+    if not email_user or not email_pass or not recipient:
+        raise ValueError("Missing email environment secrets.")
+        
+    target_rows = get_fpl_data()
+    
+    html = f"""
+    <html>
+      <body style="font-family: Arial, sans-serif; color: #333;">
+        <h2>⚽ Weekly FPL Briefing (Team {TEAM_ID})</h2>
+        <p>Here is your weekly transfer and market briefing:</p>
+        
+        <h3>🔥 Top Market Targets (Most Transferred In)</h3>
+        <table border="1" cellpadding="6" cellspacing="0" style="border-collapse: collapse; width: 100%;">
+          <tr style="background-color: #f2f2f2;">
+            <th>Player</th><th>Price</th><th>Form</th><th>Transfers In</th>
+          </tr>
+          {target_rows}
+        </table>
+        
+        <p style="margin-top: 20px; font-size: 12px; color: #777;">Generated automatically via GitHub Actions.</p>
+      </body>
+    </html>
+    """
+    
+    msg = MIMEMultipart('alternative')
+    msg['Subject'] = f"FPL Gameweek Report - Team {TEAM_ID}"
+    msg['From'] = email_user
+    msg['To'] = recipient
+    msg.attach(MIMEText(html, 'html'))
+    
+    with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
+        server.login(email_user, email_pass)
+        server.sendmail(email_user, recipient, msg.as_string())
 
 if __name__ == "__main__":
     send_email()
