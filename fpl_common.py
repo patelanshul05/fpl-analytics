@@ -646,14 +646,21 @@ def fetch_squad_state(
     picks = _extract_pick_map(selected_response)
     reconstructed = False
 
-    # Apply transfers that the chosen snapshot demonstrably does not include.
+    # Reconcile the latest transfer batch regardless of its event label.
+    # FPL can retain the previous picks response after a transfer while the
+    # transfer-history API has already associated it with the earlier event.
     # Working chronologically preserves multi-transfer sequences in one GW.
     for transfer in transfers:
         transfer_gw = safe_int(transfer.get("event"))
         element_in = safe_int(transfer.get("element_in"))
         element_out = safe_int(transfer.get("element_out"))
 
-        if transfer_gw < selected_gw or not element_in or not element_out:
+        if (
+            latest_transfer_event is None
+            or transfer_gw != latest_transfer_event
+            or not element_in
+            or not element_out
+        ):
             continue
 
         if element_in in picks and element_out not in picks:
@@ -679,6 +686,9 @@ def fetch_squad_state(
     )
 
     source = f"entry/{team_id}/event/{selected_gw}/picks"
+
+    if reconstructed:
+        source += " + latest transfers"
 
     return {
         "picks": picks,
