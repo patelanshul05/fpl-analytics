@@ -6,6 +6,7 @@ from fpl_common import (
     DEFAULT_TEAM_ID,
     Weights,
     build_chip_hints,
+    build_manual_squad,
     build_player_rows,
     build_xp,
     fetch_manager_overview,
@@ -99,6 +100,12 @@ max_ownership = st.sidebar.slider(
     step=0.5,
 )
 
+manual_squad_ids = st.sidebar.text_input(
+    "Manual squad player IDs",
+    value="",
+    help="Optional: enter exactly 15 unique FPL player IDs, separated by commas.",
+)
+
 if st.sidebar.button(
     "🔄 Refresh FPL data",
     use_container_width=True,
@@ -134,9 +141,20 @@ squad_state = cached_squad_state(
     team_id,
     current_gw,
 )
-owned_picks = squad_state["picks"]
+if manual_squad_ids.strip():
+    try:
+        owned_picks = build_manual_squad(manual_squad_ids)
+    except ValueError as error:
+        st.error(f"Manual squad override: {error}")
+        st.stop()
+    squad_source = "manual override"
+else:
+    owned_picks = squad_state["picks"]
+    squad_source = f"FPL GW{squad_state['gameweek']}"
 
-if squad_state["latest_transfer_time"]:
+if manual_squad_ids.strip():
+    st.caption(f"Team ID: {team_id} · squad source: {squad_source}")
+elif squad_state["latest_transfer_time"]:
     st.caption(
         f"Team ID: {team_id} · squad source: GW{squad_state['gameweek']} · "
         f"latest transfer: {squad_state['latest_transfer_time']}"
