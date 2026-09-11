@@ -2724,4 +2724,3 @@ def build_chip_hints(
         )
 
     return hints
-```
