@@ -161,6 +161,8 @@ def fetch_json(
         headers={
             "User-Agent": USER_AGENT,
             "Accept": "application/json",
+            "Cache-Control": "no-cache, no-store",
+            "Pragma": "no-cache",
         },
     )
 

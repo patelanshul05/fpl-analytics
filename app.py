@@ -9,7 +9,7 @@ from fpl_common import (
     build_player_rows,
     build_xp,
     fetch_manager_overview,
-    fetch_squad_by_team_id,
+    fetch_squad_state,
     find_differentials,
     get_current_gameweek,
     get_team_upcoming_fixtures,
@@ -47,10 +47,10 @@ def cached_load():
     return load_fpl_data()
 
 @st.cache_data(ttl=60, show_spinner=False)
-def cached_squad(team_id, gw):
-    return fetch_squad_by_team_id(
+def cached_squad_state(team_id, gw, events):
+    return fetch_squad_state(
         team_id,
-        gw,
+        events=events,
     )
 
 @st.cache_data(ttl=300)
@@ -131,10 +131,18 @@ current_gw = get_current_gameweek(
 
 manager = cached_manager(team_id)
 
-owned_picks = cached_squad(
+squad_state = cached_squad_state(
     team_id,
     current_gw,
+    bootstrap["events"],
 )
+owned_picks = squad_state["picks"]
+
+if squad_state["latest_transfer_time"]:
+    st.caption(
+        f"Squad source: GW{squad_state['gameweek']} · "
+        f"latest transfer: {squad_state['latest_transfer_time']}"
+    )
 
 owned_ids = set(
     owned_picks.keys()
