@@ -380,21 +380,15 @@ def fetch_transfer_history(
     """
 
     try:
-
         data = fetch_json(
             TRANSFERS_URL.format(
                 team_id=team_id
             )
         )
-
-        if isinstance(data, list):
-            return data
-
+    except (requests.RequestException, ValueError):
         return []
 
-    except requests.RequestException:
-
-        return []
+    return data if isinstance(data, list) else []
 
 
 def get_latest_transfer_event(
@@ -437,40 +431,24 @@ def fetch_picks_for_gameweek(
         return None
 
     try:
-
-        response = requests.get(
+        data = fetch_json(
             PICKS_URL.format(
                 team_id=team_id,
                 gw=gw,
-            ),
-            timeout=15,
-            headers={
-                "User-Agent": USER_AGENT,
-                "Accept": "application/json",
-            },
+            )
         )
-
-        if response.status_code != 200:
-            return None
-
-        data = response.json()
-
-        picks = data.get(
-            "picks",
-            []
-        )
-
-        if not picks:
-            return None
-
-        return data
-
-    except (
-        requests.RequestException,
-        ValueError,
-    ):
-
+    except (requests.RequestException, ValueError):
         return None
+
+    if not isinstance(data, dict):
+        return None
+
+    picks = data.get("picks")
+
+    if not isinstance(picks, list) or not picks:
+        return None
+
+    return data
 
 
 def _extract_pick_map(
@@ -499,27 +477,19 @@ def fetch_squad_state(
     max_gw_search: int = 38,
 ) -> dict:
     """
-    Determine the latest authoritative squad information available.
+    Return the manager's most current 15-player squad.
 
-    This is the main fix for stale squad data.
-
-    Strategy
-    --------
-    1. Load transfer history.
-    2. Load manager history.
-    3. Identify active + next GW.
-    4. Search backwards through recent GW picks.
-    5. Choose the newest available picks.
-    6. Compare that GW with the latest transfer event.
-    7. Return diagnostics.
-
-    We DO NOT simply assume that "next GW" picks are available.
+    FPL exposes squads as gameweek snapshots.  Transfers may appear in the
+    transfer history before the corresponding picks endpoint is refreshed.
+    Candidate snapshots are therefore checked against transfer history and,
+    when necessary, completed transfers are applied to the newest usable
+    snapshot.  This prevents the caller receiving a knowingly stale squad.
 
     Returned dictionary:
 
         {
             "picks": {element_id: pick},
-            "gameweek": int,
+            "gameweek": int | None,
             "source": str,
             "active_gameweek": int,
             "next_gameweek": int,
@@ -530,6 +500,7 @@ def fetch_squad_state(
             "active_chip": ...,
             "pick_count": 15,
             "squad_is_current": bool,
+            "squad_reconstructed": bool,
         }
     """
 
@@ -558,8 +529,12 @@ def fetch_squad_state(
         events
     )
 
-    transfers = fetch_transfer_history(
-        team_id
+    transfers = sorted(
+        fetch_transfer_history(team_id),
+        key=lambda transfer: (
+            safe_int(transfer.get("event")),
+            str(transfer.get("time", "")),
+        ),
     )
 
     latest_transfer_event = (
@@ -589,110 +564,35 @@ def fetch_squad_state(
             )
         )
 
-    history = fetch_manager_history(
-        team_id
-    )
+    # Check planning GWs first, then recent fallbacks.  Do not scan an entire
+    # season: an endpoint that has never existed is not a better candidate.
+    candidate_gws = []
 
-    history_current = history.get(
-        "current",
-        []
-    )
+    for gw in (next_gw, active_gw, latest_transfer_event):
+        gw = safe_int(gw)
 
-    history_events = [
-        safe_int(
-            item.get("event")
-        )
-        for item in history_current
-        if item.get("event") is not None
-    ]
+        if 1 <= gw <= max_gw_search and gw not in candidate_gws:
+            candidate_gws.append(gw)
 
-    # The newest event that has an actual history record is useful as an
-    # additional indicator of what FPL considers processed.
-    latest_history_gw = (
-        max(history_events)
-        if history_events
-        else None
-    )
+    highest_gw = max(candidate_gws, default=1)
 
-    # ------------------------------------------------------------------
-    # Which GW should we inspect?
-    # ------------------------------------------------------------------
-    #
-    # We deliberately search backwards from the most relevant GW rather
-    # than assuming the next GW endpoint is populated.
-    #
-    search_start = max(
-        active_gw,
-        next_gw,
-        latest_transfer_event or 0,
-        latest_history_gw or 0,
-    )
+    for gw in range(highest_gw - 1, max(highest_gw - 5, 0), -1):
+        if gw not in candidate_gws:
+            candidate_gws.append(gw)
 
-    search_start = min(
-        search_start,
-        max_gw_search,
-    )
-
-    candidate_gws = list(
-        range(
-            search_start,
-            0,
-            -1,
-        )
-    )
-
-    selected_response = None
-    selected_gw = None
+    snapshots = {}
 
     for gw in candidate_gws:
+        response = fetch_picks_for_gameweek(team_id, gw)
 
-        response = fetch_picks_for_gameweek(
-            team_id,
-            gw,
-        )
-
-        if response is None:
-            continue
-
-        selected_response = response
-        selected_gw = gw
-        break
-
-    # ------------------------------------------------------------------
-    # Fallback if normal search somehow failed.
-    # ------------------------------------------------------------------
-
-    if selected_response is None:
-
-        # Try the active and next GWs explicitly.
-        fallback_gws = list(
-            dict.fromkeys(
-                [
-                    active_gw,
-                    next_gw,
-                    max(active_gw - 1, 1),
-                ]
-            )
-        )
-
-        for gw in fallback_gws:
-
-            response = fetch_picks_for_gameweek(
-                team_id,
-                gw,
-            )
-
-            if response is not None:
-
-                selected_response = response
-                selected_gw = gw
-                break
+        if response is not None:
+            snapshots[gw] = response
 
     # ------------------------------------------------------------------
     # No squad found.
     # ------------------------------------------------------------------
 
-    if selected_response is None:
+    if not snapshots:
 
         return {
             "picks": {},
@@ -702,52 +602,83 @@ def fetch_squad_state(
             "next_gameweek": next_gw,
             "latest_transfer_event": latest_transfer_event,
             "latest_transfer_time": latest_transfer_time,
-            "latest_history_gameweek": latest_history_gw,
             "transfers": transfers,
             "entry_history": {},
             "active_chip": None,
             "pick_count": 0,
             "squad_is_current": False,
+            "squad_reconstructed": False,
         }
 
-    picks = _extract_pick_map(
-        selected_response
+    transfers_by_gw = {}
+
+    for transfer in transfers:
+        gw = safe_int(transfer.get("event"))
+
+        if gw >= 1:
+            transfers_by_gw[gw] = transfers_by_gw.get(gw, 0) + 1
+
+    # Prefer a snapshot whose own transfer count accounts for its event,
+    # while retaining the natural preference for the next/current GW.
+    selected_gw = None
+    selected_response = None
+    selected_score = -10 ** 9
+
+    for gw, response in snapshots.items():
+        entry_history = response.get("entry_history") or {}
+        snapshot_transfers = safe_int(entry_history.get("event_transfers"))
+        known_transfers = transfers_by_gw.get(gw, 0)
+        score = gw
+
+        if snapshot_transfers >= known_transfers:
+            score += 100
+        if gw == next_gw:
+            score += 50
+        if gw == active_gw:
+            score += 25
+
+        if score > selected_score:
+            selected_gw = gw
+            selected_response = response
+            selected_score = score
+
+    raw_picks = selected_response.get("picks", [])
+    picks = _extract_pick_map(selected_response)
+    reconstructed = False
+
+    # Apply transfers that the chosen snapshot demonstrably does not include.
+    # Working chronologically preserves multi-transfer sequences in one GW.
+    for transfer in transfers:
+        transfer_gw = safe_int(transfer.get("event"))
+        element_in = safe_int(transfer.get("element_in"))
+        element_out = safe_int(transfer.get("element_out"))
+
+        if transfer_gw < selected_gw or not element_in or not element_out:
+            continue
+
+        if element_in in picks and element_out not in picks:
+            continue
+
+        outgoing_pick = picks.pop(element_out, None)
+
+        if outgoing_pick is None:
+            continue
+
+        replacement_pick = dict(outgoing_pick)
+        replacement_pick["element"] = element_in
+        picks[element_in] = replacement_pick
+        reconstructed = True
+
+    entry_history = selected_response.get("entry_history") or {}
+    snapshot_transfer_count = safe_int(entry_history.get("event_transfers"))
+    known_transfer_count = transfers_by_gw.get(selected_gw, 0)
+    squad_is_current = (
+        len(picks) == 15
+        and (latest_transfer_event is None or selected_gw >= latest_transfer_event or reconstructed)
+        and (snapshot_transfer_count >= known_transfer_count or reconstructed)
     )
 
-    entry_history = (
-        selected_response.get(
-            "entry_history",
-            {}
-        )
-    )
-
-    # ------------------------------------------------------------------
-    # Determine whether this squad incorporates the latest transfer.
-    # ------------------------------------------------------------------
-    #
-    # A transfer event N should appear in the GW N picks once that GW's
-    # picks have been submitted/locked.
-    #
-    # If the latest transfer event is <= selected GW, the selected picks
-    # should incorporate that transfer.
-    #
-    # If the latest transfer event is > selected GW, then the public picks
-    # endpoint does not yet expose those latest picks; we flag this rather
-    # than pretending the squad is current.
-    # ------------------------------------------------------------------
-
-    squad_is_current = True
-
-    if latest_transfer_event is not None:
-
-        if selected_gw < latest_transfer_event:
-
-            squad_is_current = False
-
-    source = (
-        f"entry/{team_id}/event/"
-        f"{selected_gw}/picks"
-    )
+    source = f"entry/{team_id}/event/{selected_gw}/picks"
 
     return {
         "picks": picks,
@@ -757,20 +688,21 @@ def fetch_squad_state(
         "next_gameweek": next_gw,
         "latest_transfer_event": latest_transfer_event,
         "latest_transfer_time": latest_transfer_time,
-        "latest_history_gameweek": latest_history_gw,
         "transfers": transfers,
         "entry_history": entry_history,
-        "active_chip": selected_response.get(
-            "active_chip"
-        ),
+        "active_chip": selected_response.get("active_chip"),
         "pick_count": len(picks),
         "squad_is_current": squad_is_current,
+        "squad_reconstructed": reconstructed,
+        "snapshot_transfer_count": snapshot_transfer_count,
+        "known_transfer_count": known_transfer_count,
+        "raw_picks": raw_picks,
     }
 
 
 def fetch_squad_by_team_id(
     team_id: int,
-    current_gw: int,
+    current_gw: Optional[int] = None,
     force_previous: bool = False,
 ) -> dict:
     """
@@ -784,15 +716,22 @@ def fetch_squad_by_team_id(
     Returns the player->pick mapping expected by the existing application.
     """
 
+    # current_gw and force_previous are retained for callers using the older
+    # public signature.  Fresh event data is intentionally used instead.
+    # Fetch bootstrap directly: squad synchronisation must not fail merely
+    # because the unrelated fixtures endpoint is temporarily unavailable.
+    try:
+        bootstrap = fetch_json(BOOTSTRAP_URL)
+        events = bootstrap.get("events", [])
+    except (requests.RequestException, ValueError):
+        events = None
+
     state = fetch_squad_state(
         team_id,
-        events=None,
+        events=events,
     )
 
-    return state.get(
-        "picks",
-        {}
-    )
+    return state.get("picks", {})
 
 
 # ============================================================================
@@ -2724,3 +2663,4 @@ def build_chip_hints(
         )
 
     return hints
+    
