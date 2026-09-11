@@ -646,19 +646,17 @@ def fetch_squad_state(
     picks = _extract_pick_map(selected_response)
     reconstructed = False
 
-    # Reconcile the latest transfer batch regardless of its event label.
-    # FPL can retain the previous picks response after a transfer while the
-    # transfer-history API has already associated it with the earlier event.
-    # Working chronologically preserves multi-transfer sequences in one GW.
+    # Reconcile the ordered transfer history rather than relying on the event
+    # label. FPL can retain an older picks response after a transfer, and the
+    # transfer-history API can associate that transfer with an earlier event.
+    # Transfers already represented by the snapshot are skipped; replaying the
+    # rest chronologically preserves multi-transfer sequences.
     for transfer in transfers:
-        transfer_gw = safe_int(transfer.get("event"))
         element_in = safe_int(transfer.get("element_in"))
         element_out = safe_int(transfer.get("element_out"))
 
         if (
-            latest_transfer_event is None
-            or transfer_gw != latest_transfer_event
-            or not element_in
+            not element_in
             or not element_out
         ):
             continue
