@@ -618,24 +618,20 @@ def fetch_squad_state(
         if gw >= 1:
             transfers_by_gw[gw] = transfers_by_gw.get(gw, 0) + 1
 
-    # Prefer a snapshot whose own transfer count accounts for its event,
-    # while retaining the natural preference for the next/current GW.
+    # Prefer the newest available snapshot. Its transfer count can lag the
+    # transfer-history endpoint, so that count must not make an older
+    # snapshot look more current.
     selected_gw = None
     selected_response = None
     selected_score = -10 ** 9
 
     for gw, response in snapshots.items():
-        entry_history = response.get("entry_history") or {}
-        snapshot_transfers = safe_int(entry_history.get("event_transfers"))
-        known_transfers = transfers_by_gw.get(gw, 0)
         score = gw
 
-        if snapshot_transfers >= known_transfers:
-            score += 100
         if gw == next_gw:
-            score += 50
+            score += 2
         if gw == active_gw:
-            score += 25
+            score += 1
 
         if score > selected_score:
             selected_gw = gw
