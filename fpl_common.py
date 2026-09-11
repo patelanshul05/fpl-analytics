@@ -1,4 +1,3 @@
-```python
 """
 fpl_common.py
 =============
