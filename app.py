@@ -138,9 +138,11 @@ owned_picks = squad_state["picks"]
 
 if squad_state["latest_transfer_time"]:
     st.caption(
-        f"Squad source: GW{squad_state['gameweek']} · "
+        f"Team ID: {team_id} · squad source: GW{squad_state['gameweek']} · "
         f"latest transfer: {squad_state['latest_transfer_time']}"
     )
+else:
+    st.caption(f"Team ID: {team_id} · no transfer history returned by FPL")
 
 owned_ids = set(
     owned_picks.keys()

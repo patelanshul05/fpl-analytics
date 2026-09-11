@@ -27,4 +27,5 @@ jobs:
           EMAIL_USER: ${{ secrets.EMAIL_USER }}
           EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
           RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
+          FPL_TEAM_ID: ${{ secrets.FPL_TEAM_ID || '152146' }}
         run: python send_fpl_email.py
