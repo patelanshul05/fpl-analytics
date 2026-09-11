@@ -46,14 +46,11 @@ st.caption(
 def cached_load():
     return load_fpl_data()
 
-
-@st.cache_data(ttl=60)
 def cached_squad(team_id, gw):
     return fetch_squad_by_team_id(
         team_id,
         gw,
     )
-
 
 @st.cache_data(ttl=300)
 def cached_manager(team_id):
