@@ -143,7 +143,7 @@ def normalize(
 
 def fetch_json(
     url: str,
-    timeout: int = 20,
+    timeout: int = 8,
 ):
     """
     Fetch JSON from the public FPL API.
@@ -154,7 +154,10 @@ def fetch_json(
 
     response = requests.get(
         url,
-        timeout=timeout,
+        # A short connect timeout avoids a Streamlit rerun appearing to hang
+        # when the public FPL API is unavailable; the read timeout still
+        # leaves enough time for a normal response.
+        timeout=(3.05, timeout),
         headers={
             "User-Agent": USER_AGENT,
             "Accept": "application/json",
@@ -481,9 +484,10 @@ def fetch_squad_state(
 
     FPL exposes squads as gameweek snapshots.  Transfers may appear in the
     transfer history before the corresponding picks endpoint is refreshed.
-    Candidate snapshots are therefore checked against transfer history and,
-    when necessary, completed transfers are applied to the newest usable
-    snapshot.  This prevents the caller receiving a knowingly stale squad.
+    Completed transfers are applied when the next/current snapshot does not
+    yet include them.  The function intentionally makes only two picks
+    requests (next GW, then current GW), so a slow FPL API cannot leave the
+    app loading indefinitely.
 
     Returned dictionary:
 
@@ -564,20 +568,16 @@ def fetch_squad_state(
             )
         )
 
-    # Check planning GWs first, then recent fallbacks.  Do not scan an entire
-    # season: an endpoint that has never existed is not a better candidate.
+    # Check only the two relevant snapshots.  The previous implementation
+    # searched several historical endpoints, multiplying each API timeout
+    # and causing Streamlit to remain on its loading spinner.
+    # max_gw_search is retained solely for backwards-compatible callers.
     candidate_gws = []
 
-    for gw in (next_gw, active_gw, latest_transfer_event):
+    for gw in (next_gw, active_gw):
         gw = safe_int(gw)
 
         if 1 <= gw <= max_gw_search and gw not in candidate_gws:
-            candidate_gws.append(gw)
-
-    highest_gw = max(candidate_gws, default=1)
-
-    for gw in range(highest_gw - 1, max(highest_gw - 5, 0), -1):
-        if gw not in candidate_gws:
             candidate_gws.append(gw)
 
     snapshots = {}
@@ -2663,4 +2663,3 @@ def build_chip_hints(
         )
 
     return hints
-    
