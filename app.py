@@ -47,10 +47,9 @@ def cached_load():
     return load_fpl_data()
 
 @st.cache_data(ttl=60, show_spinner=False)
-def cached_squad_state(team_id, gw, events):
+def cached_squad_state(team_id, gw):
     return fetch_squad_state(
         team_id,
-        events=events,
     )
 
 @st.cache_data(ttl=300)
@@ -134,7 +133,6 @@ manager = cached_manager(team_id)
 squad_state = cached_squad_state(
     team_id,
     current_gw,
-    bootstrap["events"],
 )
 owned_picks = squad_state["picks"]
 

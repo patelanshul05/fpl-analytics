@@ -24,8 +24,10 @@ from __future__ import annotations
 
 import math
 import os
+import time
 from dataclasses import dataclass
 from typing import Optional
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import requests
 
@@ -152,8 +154,21 @@ def fetch_json(
     controls caching and can force a refresh.
     """
 
+    parts = urlsplit(url)
+    query = dict(parse_qsl(parts.query))
+    query["_"] = str(time.time_ns())
+    fresh_url = urlunsplit(
+        (
+            parts.scheme,
+            parts.netloc,
+            parts.path,
+            urlencode(query),
+            parts.fragment,
+        )
+    )
+
     response = requests.get(
-        url,
+        fresh_url,
         # A short connect timeout avoids a Streamlit rerun appearing to hang
         # when the public FPL API is unavailable; the read timeout still
         # leaves enough time for a normal response.
