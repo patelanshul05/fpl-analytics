@@ -487,6 +487,30 @@ def _extract_pick_map(
     }
 
 
+def build_manual_squad(player_ids: str) -> dict:
+    """Build the pick mapping used by the dashboard from 15 player IDs."""
+
+    ids = [
+        safe_int(value, -1)
+        for value in player_ids.replace("\n", ",").split(",")
+        if value.strip()
+    ]
+
+    if len(ids) != 15:
+        raise ValueError("Enter exactly 15 comma-separated player IDs.")
+
+    if any(player_id < 1 for player_id in ids):
+        raise ValueError("Player IDs must be positive integers.")
+
+    if len(set(ids)) != len(ids):
+        raise ValueError("Player IDs must be unique.")
+
+    return {
+        player_id: {"element": player_id}
+        for player_id in ids
+    }
+
+
 # ============================================================================
 # ROBUST CURRENT SQUAD SYNCHRONISATION
 # ============================================================================
